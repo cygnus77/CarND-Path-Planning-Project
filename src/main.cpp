@@ -9,6 +9,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "Eigen-3.3/Eigen/Dense"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 using Eigen::MatrixXd;
@@ -334,7 +335,7 @@ int main() {
               else
               {
                 s = end_path_s;
-                d = end_path_d;
+                d = car_d;
 
                 /*
                 // velocity at s
@@ -378,10 +379,24 @@ int main() {
               
               vector<double> coeffs = JMT(Si, Sf, T);
 
+              // Get 5 points for spline
+              std::vector<double> Spts, Dpts, Tpts;
+              for(double t = 0; t <= T; t += t/5) {
+                double s = poly_eval(coeffs, t);
+                Spts.push_back(s);
+                Dpts.push_back(d);
+                Tpts.push_back(t);
+              }
+
+              tk::spline Sspline, Dspline;
+              Sspline.set_points(Spts,Tpts);
+              Sspline.set_points(Dpts,Tpts);
+
               double t = 0;
               for(int i = 0; i < max_pts-path_size; i++, t += 0.02)
               {    
-                s = poly_eval(coeffs, t);
+                double s = Sspline(t);
+                double d = Dspline(t);
                 if(s > max_s) s -= max_s;
                 vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
                 next_x_vals.push_back(xy[0]);
