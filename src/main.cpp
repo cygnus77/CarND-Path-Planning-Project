@@ -167,7 +167,7 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
-vector<double> JMT(vector< double> start, vector <double> end, double T)
+void JMT(vector<double>& dst, const vector<double>& start, const vector <double>& end, double T)
 {
     /*
     Calculate the Jerk Minimizing Trajectory that connects the initial state
@@ -204,7 +204,7 @@ vector<double> JMT(vector< double> start, vector <double> end, double T)
     
     MatrixXd alpha = Tmat.inverse() * Sfmat;
     
-    return {Si, Si_d, 0.5*Si_dd, alpha(0), alpha(1), alpha(2)};
+    dst.assign({Si, Si_d, 0.5*Si_dd, alpha(0), alpha(1), alpha(2)});
     
 }
 
@@ -243,7 +243,7 @@ int main() {
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
 
-  double us = 0, as = 0, ud = 0, ad = 0;
+  vector<double> Scoeffs, Dcoeffs;
 
   // Waypoint map to read from
   string map_file_ = "../data/highway_map.csv";
@@ -270,7 +270,7 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&us,&as,&ud,&ad](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
 
     // The max s value before wrapping around the track back to 0
@@ -323,16 +323,20 @@ int main() {
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
             int path_size = previous_path_x.size();
 
-            for(int i = 0; i < path_size; i++)
-            {
-                next_x_vals.push_back(previous_path_x[i]);
-                next_y_vals.push_back(previous_path_y[i]);
-            }
+            
+            if(path_size > 50) {
 
-            if(path_size < 50) {
+              for(int i = 0; i < path_size; i++)
+              {
+                  next_x_vals.push_back(previous_path_x[i]);
+                  next_y_vals.push_back(previous_path_y[i]);
+              }
+            
+            } else {
 
               std::cout << "telemetry " << path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << std::endl;
 
+              double T = (max_pts-path_size)*0.02;
               double s, d, as, ad, us, ud;
               if(path_size == 0)
               {
@@ -346,61 +350,24 @@ int main() {
                 s = end_path_s;
                 d = end_path_d;
 
-/*
-                double px1 = previous_path_x[path_size-1];
-                double py1 = previous_path_y[path_size-1];
-
-                double px3 = previous_path_x[path_size-3];
-                double py3 = previous_path_y[path_size-3];
-
-                double px4 = previous_path_x[path_size-4];
-                double py4 = previous_path_y[path_size-4];
-
-                double px6 = previous_path_x[path_size-6];
-                double py6 = previous_path_y[path_size-6];
-
-                double px7 = previous_path_x[path_size-7];
-                double py7 = previous_path_y[path_size-7];
-
-                vector<double> sd1 = getFrenet(previous_path_x[path_size-3], previous_path_y[path_size-3], atan2(py1 - py3, px1 - px3), map_waypoints_x, map_waypoints_y);
-                vector<double> sd3 = getFrenet(previous_path_x[path_size-4], previous_path_y[path_size-4], atan2(py3 - py4, px3 - px4), map_waypoints_x, map_waypoints_y);
-                vector<double> sd4 = getFrenet(previous_path_x[path_size-4], previous_path_y[path_size-4], atan2(py4 - py6, px4 - px6), map_waypoints_x, map_waypoints_y);
-                vector<double> sd6 = getFrenet(previous_path_x[path_size-6], previous_path_y[path_size-6], atan2(py6 - py7, px6 - px7), map_waypoints_x, map_waypoints_y);
-
-                std::cout << "x: " << previous_path_x[path_size-6] << "," << previous_path_x[path_size-4] << "," << previous_path_x[path_size-3] << "," << previous_path_x[path_size-1] << std::endl;
-                std::cout << "y: " << previous_path_y[path_size-6] << "," << previous_path_y[path_size-4] << "," << previous_path_y[path_size-3] << "," << previous_path_y[path_size-1] << std::endl;
-                std::cout << "s: " << sd6[0] << ", " << sd4[0] << ", " << sd3[0] << ", " << sd1[0] << std::endl;
-                std::cout << "d: " << sd6[1] << ", " << sd4[1] << ", " << sd3[1] << ", " << sd1[1] << std::endl;
-
-                // s velocity
-                us = (sd1[0] - sd3[0])/0.04;
-                double u0 = (sd4[0] - sd6[0])/0.04;
-                as = (us - u0) / 0.06;
-
-                // d velocity
-                ud = (sd1[1] - sd3[1])/0.04;
-                u0 = (sd4[1] - sd6[1])/0.04;
-                ad = (ud - u0) / 0.06;            
-*/
-                /*
-                double t = path_size * 0.02; // num path entries * 20ms
-                a = 2 * (end_path_s - car_s - car_speed_ms*t)/(t*t);
-                u = car_speed_ms + (a * t);
-                */
+                // Calculate velocities and accelaration from previous JMT
+                us = poly_eval(derivative(Scoeffs), T);
+                as = poly_eval(derivative(derivative(Scoeffs)), T);
+                ud = poly_eval(derivative(Dcoeffs), T);
+                ad = poly_eval(derivative(derivative(Dcoeffs)), T);
               }
 
               std::cout << "s,u,a:" << s << ", " << us << ", " << as << std::endl;
               std::cout << "d,u,a:" << d << ", " << ud << ", " << ad << std::endl;
 
               // Calculate trajectory
-              
               double Ta = abs((SPEED_LIMIT - us) * TIME_TO_MAX / SPEED_LIMIT);
               double newa = 0, vs = us;
               if(Ta != 0) {
                 newa = (SPEED_LIMIT - us) / Ta;
                 vs += newa * Ta;
               }
-              double T = (max_pts-path_size)*0.02;
+              
               double final_s = s, final_vs, final_as;
               if(T < Ta){
                 final_s += us*T + 0.5*newa*T*T;
@@ -413,7 +380,6 @@ int main() {
                 final_as = 0;
               }
               
-
               vector<double> Si = { s, us, as };
               vector<double> Sf = { final_s, final_vs, final_as };
 
@@ -424,36 +390,23 @@ int main() {
               std::cout << "sf,vf,af:" << final_s << ", " << final_vs << ", " << final_as << std::endl;
               std::cout << "df,vf,af:" << target_d << ", " << 0 << ", " << 0 << std::endl;
               
-              vector<double> Scoeffs = JMT(Si, Sf, T);
-              vector<double> Dcoeffs = JMT(Di, Df, T);
-
-              us = poly_eval(derivative(Scoeffs), T);
-              if(us < 1e-5) us = 0;
-              as = poly_eval(derivative(derivative(Scoeffs)), T);
-              if(as < 1e-5) as = 0;
-              ud = poly_eval(derivative(Dcoeffs), T);
-              if(ud < 1e-5) ud = 0;
-              ad = poly_eval(derivative(derivative(Dcoeffs)), T);
-              if(ad < 1e-5) ad = 0;
+              JMT(Scoeffs, Si, Sf, T);
+              JMT(Dcoeffs, Di, Df, T);
 
               // Get 5 points for spline
               std::vector<double> Xpts, Ypts, Tpts;
 
-              // Add points from pending trajectory
-              if(path_size > 1) {
+              if(path_size > 0) {
+                // Add car's current position to trajectory spline generation
                 Tpts.push_back(-path_size*0.02);
                 Xpts.push_back(car_x);
                 Ypts.push_back(car_y);
-/*
-                Tpts.push_back(-0.02);
-                Xpts.push_back(previous_path_x[path_size-1]);
-                Ypts.push_back(previous_path_y[path_size-1]);*/
               }
 
               for(double t = 0; t <= T; t += T/3.0) {
                 double s = poly_eval(Scoeffs, t);
                 double d = poly_eval(Dcoeffs, t);
-                //if(s > max_s) s -= max_s;
+                if(s > max_s) s -= max_s;
                 vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
                 Xpts.push_back(xy[0]);
                 Ypts.push_back(xy[1]);
@@ -466,8 +419,8 @@ int main() {
 
               std::cout << "Spline done" << std::endl;
 
-              double t = 0;
-              for(int i = 0; i < max_pts-path_size; i++, t += 0.02)
+              double t = -0.02 * path_size;
+              for(int i = 0; i < max_pts; i++, t += 0.02)
               {    
                 double x = Xspline(t);
                 double y = Yspline(t);
