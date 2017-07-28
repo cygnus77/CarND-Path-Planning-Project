@@ -15,8 +15,8 @@ using namespace std;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
-#define SPEED_LIMIT 22.352  // m/s = 50 mph
-#define TIME_TO_MAX 10      // 0 to 50 in 20 sec
+#define SPEED_LIMIT 20  // m/s = 50 mph
+#define TIME_TO_MAX 20      // 0 to 50 in 20 sec
 #define MPH2MS  0.447027269
 
 // for convenience
@@ -221,10 +221,17 @@ double poly_eval(const vector<double>& coeffs, double x)
 double velocity_at(double x1, double y1, double x2, double y2, double t)
 {
   double vel = sqrt( (x2-x1)*(x2-x1) + (y2-y1)*(y2-y1) ) / t;
-  std::cout << "vel(["<<x1<<","<<y1<<"],["<<x2<<","<<y2<<"])="<<vel<<std::endl;
   return vel;
 }
 
+vector<double> derivative(const vector<double>& coeffs)
+{
+  vector<double> d;
+  for(int i = 1; i < coeffs.size(); i++) {
+    d.push_back(i * coeffs[i]);
+  }
+  return d;
+}
 
 int main() {
   uWS::Hub h;
@@ -235,6 +242,8 @@ int main() {
   vector<double> map_waypoints_s;
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
+
+  double us = 0, as = 0, ud = 0, ad = 0;
 
   // Waypoint map to read from
   string map_file_ = "../data/highway_map.csv";
@@ -261,13 +270,13 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&us,&as,&ud,&ad](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
 
     // The max s value before wrapping around the track back to 0
     double max_s = 6945.554;
-    double max_pts = 100;
-
+    double max_pts = 500;
+    double target_d = 6.16483;
 
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -324,83 +333,146 @@ int main() {
 
               std::cout << "telemetry " << path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << std::endl;
 
-              double s, d, a, u;
+              double s, d, as, ad, us, ud;
               if(path_size == 0)
               {
                 s = car_s;
                 d = car_d;
-                a = 0;
-                u = 0;
+                as = ad = 0;
+                us = ud = 0;
               }
               else
               {
                 s = end_path_s;
-                d = car_d;
+                d = end_path_d;
 
+/*
+                double px1 = previous_path_x[path_size-1];
+                double py1 = previous_path_y[path_size-1];
+
+                double px3 = previous_path_x[path_size-3];
+                double py3 = previous_path_y[path_size-3];
+
+                double px4 = previous_path_x[path_size-4];
+                double py4 = previous_path_y[path_size-4];
+
+                double px6 = previous_path_x[path_size-6];
+                double py6 = previous_path_y[path_size-6];
+
+                double px7 = previous_path_x[path_size-7];
+                double py7 = previous_path_y[path_size-7];
+
+                vector<double> sd1 = getFrenet(previous_path_x[path_size-3], previous_path_y[path_size-3], atan2(py1 - py3, px1 - px3), map_waypoints_x, map_waypoints_y);
+                vector<double> sd3 = getFrenet(previous_path_x[path_size-4], previous_path_y[path_size-4], atan2(py3 - py4, px3 - px4), map_waypoints_x, map_waypoints_y);
+                vector<double> sd4 = getFrenet(previous_path_x[path_size-4], previous_path_y[path_size-4], atan2(py4 - py6, px4 - px6), map_waypoints_x, map_waypoints_y);
+                vector<double> sd6 = getFrenet(previous_path_x[path_size-6], previous_path_y[path_size-6], atan2(py6 - py7, px6 - px7), map_waypoints_x, map_waypoints_y);
+
+                std::cout << "x: " << previous_path_x[path_size-6] << "," << previous_path_x[path_size-4] << "," << previous_path_x[path_size-3] << "," << previous_path_x[path_size-1] << std::endl;
+                std::cout << "y: " << previous_path_y[path_size-6] << "," << previous_path_y[path_size-4] << "," << previous_path_y[path_size-3] << "," << previous_path_y[path_size-1] << std::endl;
+                std::cout << "s: " << sd6[0] << ", " << sd4[0] << ", " << sd3[0] << ", " << sd1[0] << std::endl;
+                std::cout << "d: " << sd6[1] << ", " << sd4[1] << ", " << sd3[1] << ", " << sd1[1] << std::endl;
+
+                // s velocity
+                us = (sd1[0] - sd3[0])/0.04;
+                double u0 = (sd4[0] - sd6[0])/0.04;
+                as = (us - u0) / 0.06;
+
+                // d velocity
+                ud = (sd1[1] - sd3[1])/0.04;
+                u0 = (sd4[1] - sd6[1])/0.04;
+                ad = (ud - u0) / 0.06;            
+*/
                 /*
-                // velocity at s
-                u = velocity_at(previous_path_x[path_size-1], previous_path_y[path_size-1], previous_path_x[path_size-2], previous_path_y[path_size-2], 0.02);
-                double u0 = velocity_at(previous_path_x[path_size-2], previous_path_y[path_size-2], previous_path_x[path_size-3], previous_path_y[path_size-3], 0.02);
-                a = (u - u0) / 0.02;
-                */
-
-                
                 double t = path_size * 0.02; // num path entries * 20ms
                 a = 2 * (end_path_s - car_s - car_speed_ms*t)/(t*t);
                 u = car_speed_ms + (a * t);
-                
+                */
               }
+
+              std::cout << "s,u,a:" << s << ", " << us << ", " << as << std::endl;
+              std::cout << "d,u,a:" << d << ", " << ud << ", " << ad << std::endl;
 
               // Calculate trajectory
               
-              double Ta = abs((SPEED_LIMIT - u) * TIME_TO_MAX / SPEED_LIMIT);
-              double newa = (SPEED_LIMIT - u) / Ta;
-              double v = u + newa * Ta;
+              double Ta = abs((SPEED_LIMIT - us) * TIME_TO_MAX / SPEED_LIMIT);
+              double newa = 0, vs = us;
+              if(Ta != 0) {
+                newa = (SPEED_LIMIT - us) / Ta;
+                vs += newa * Ta;
+              }
               double T = (max_pts-path_size)*0.02;
-              double final_s = s, final_v, final_a;
+              double final_s = s, final_vs, final_as;
               if(T < Ta){
-                final_s += u*T + 0.5*newa*T*T;
-                final_v = u + newa*T;
-                final_a = newa;
+                final_s += us*T + 0.5*newa*T*T;
+                final_vs = us + newa*T;
+                final_as = newa;
               } else {
-                final_s += u*Ta + 0.5*newa*Ta*Ta;
-                final_s += v * (T-Ta);
-                final_v = v;
-                final_a = 0;
+                final_s += us*Ta + 0.5*newa*Ta*Ta;
+                final_s += vs * (T-Ta);
+                final_vs = vs;
+                final_as = 0;
               }
               
 
-              vector<double> Si = { s, u, a };
-              vector<double> Sf = { final_s, final_v, final_a };
+              vector<double> Si = { s, us, as };
+              vector<double> Sf = { final_s, final_vs, final_as };
+
+              vector<double> Di = { d, ud, ad };
+              vector<double> Df = { target_d, 0, 0 };
 
               std::cout << "T:" << T << "; Ta:" << Ta << "; newa:" << newa << std::endl;
-              std::cout << "s,u,a:" << s << ", " << u << ", " << a << std::endl;
-              std::cout << "sf,vf,af:" << final_s << ", " << final_v << ", " << final_a << std::endl;
+              std::cout << "sf,vf,af:" << final_s << ", " << final_vs << ", " << final_as << std::endl;
+              std::cout << "df,vf,af:" << target_d << ", " << 0 << ", " << 0 << std::endl;
               
-              vector<double> coeffs = JMT(Si, Sf, T);
+              vector<double> Scoeffs = JMT(Si, Sf, T);
+              vector<double> Dcoeffs = JMT(Di, Df, T);
+
+              us = poly_eval(derivative(Scoeffs), T);
+              if(us < 1e-5) us = 0;
+              as = poly_eval(derivative(derivative(Scoeffs)), T);
+              if(as < 1e-5) as = 0;
+              ud = poly_eval(derivative(Dcoeffs), T);
+              if(ud < 1e-5) ud = 0;
+              ad = poly_eval(derivative(derivative(Dcoeffs)), T);
+              if(ad < 1e-5) ad = 0;
 
               // Get 5 points for spline
-              std::vector<double> Spts, Dpts, Tpts;
-              for(double t = 0; t <= T; t += t/5) {
-                double s = poly_eval(coeffs, t);
-                Spts.push_back(s);
-                Dpts.push_back(d);
+              std::vector<double> Xpts, Ypts, Tpts;
+
+              // Add points from pending trajectory
+              if(path_size > 1) {
+                Tpts.push_back(-path_size*0.02);
+                Xpts.push_back(car_x);
+                Ypts.push_back(car_y);
+/*
+                Tpts.push_back(-0.02);
+                Xpts.push_back(previous_path_x[path_size-1]);
+                Ypts.push_back(previous_path_y[path_size-1]);*/
+              }
+
+              for(double t = 0; t <= T; t += T/3.0) {
+                double s = poly_eval(Scoeffs, t);
+                double d = poly_eval(Dcoeffs, t);
+                //if(s > max_s) s -= max_s;
+                vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                Xpts.push_back(xy[0]);
+                Ypts.push_back(xy[1]);
                 Tpts.push_back(t);
               }
 
-              tk::spline Sspline, Dspline;
-              Sspline.set_points(Spts,Tpts);
-              Sspline.set_points(Dpts,Tpts);
+              tk::spline Xspline, Yspline;
+              Xspline.set_points(Tpts,Xpts);
+              Yspline.set_points(Tpts,Ypts);
+
+              std::cout << "Spline done" << std::endl;
 
               double t = 0;
               for(int i = 0; i < max_pts-path_size; i++, t += 0.02)
               {    
-                double s = Sspline(t);
-                double d = Dspline(t);
-                if(s > max_s) s -= max_s;
-                vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                next_x_vals.push_back(xy[0]);
-                next_y_vals.push_back(xy[1]);
+                double x = Xspline(t);
+                double y = Yspline(t);
+                next_x_vals.push_back(x);
+                next_y_vals.push_back(y);
               }
             }
 
