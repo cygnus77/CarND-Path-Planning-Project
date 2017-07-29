@@ -15,8 +15,8 @@ using namespace std;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
-#define SPEED_LIMIT 20  // m/s = 50 mph
-#define TIME_TO_MAX 20      // 0 to 50 in 20 sec
+#define SPEED_LIMIT 20.0  // m/s = 50 mph
+#define TIME_TO_MAX 20.0      // 0 to 50 in 20 sec
 #define MPH2MS  0.447027269
 
 // for convenience
@@ -233,6 +233,17 @@ vector<double> derivative(const vector<double>& coeffs)
   return d;
 }
 
+void print_trajectory(const string& msg, const vector<double>& coeffs)
+{
+  std::cout << msg;
+  for(const double& p: coeffs){
+    std::cout << "(" << p << "*t^" << (&p - &coeffs[0]) << ") + ";
+  }
+  std::cout << std::endl;
+}
+
+#define clip(x) x = x < 1e-5 ? 0 : x
+
 int main() {
   uWS::Hub h;
 
@@ -243,6 +254,7 @@ int main() {
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
 
+  int total_path_size;
   vector<double> Scoeffs, Dcoeffs;
 
   // Waypoint map to read from
@@ -270,12 +282,11 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs, &total_path_size](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
 
     // The max s value before wrapping around the track back to 0
     double max_s = 6945.554;
-    double max_pts = 500;
     double target_d = 6.16483;
 
     // "42" at the start of the message means there's a websocket message event.
@@ -321,12 +332,12 @@ int main() {
 
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-            int path_size = previous_path_x.size();
+            int prev_path_size = previous_path_x.size();
 
             
-            if(path_size > 50) {
+            if(prev_path_size > 20) {
 
-              for(int i = 0; i < path_size; i++)
+              for(int i = 0; i < prev_path_size; i++)
               {
                   next_x_vals.push_back(previous_path_x[i]);
                   next_y_vals.push_back(previous_path_y[i]);
@@ -334,19 +345,23 @@ int main() {
             
             } else {
 
-              std::cout << "telemetry " << path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << std::endl;
-
-              double T = (max_pts-path_size)*0.02;
+              //std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << std::endl;
+              
               double s, d, as, ad, us, ud;
-              if(path_size == 0)
+              if(prev_path_size == 0)
               {
                 s = car_s;
+                us = 0.5;
+                as = 0.07;
+
                 d = car_d;
-                as = ad = 0;
-                us = ud = 0;
+                ud = 0;
+                ad = 0;
               }
               else
               {
+                double T = (total_path_size - prev_path_size)*0.02;
+                // TODO: replace this with poly_eval(Scoeffs, T), poly_eval(Dcoeffs, T)
                 s = end_path_s;
                 d = end_path_d;
 
@@ -357,48 +372,57 @@ int main() {
                 ad = poly_eval(derivative(derivative(Dcoeffs)), T);
               }
 
-              std::cout << "s,u,a:" << s << ", " << us << ", " << as << std::endl;
-              std::cout << "d,u,a:" << d << ", " << ud << ", " << ad << std::endl;
+              //std::cout << "s,u,a:" << s << ", " << us << ", " << as << std::endl;
+              //std::cout << "d,u,a:" << d << ", " << ud << ", " << ad << std::endl;
 
               // Calculate trajectory
-              double Ta = abs((SPEED_LIMIT - us) * TIME_TO_MAX / SPEED_LIMIT);
-              double newa = 0, vs = us;
-              if(Ta != 0) {
-                newa = (SPEED_LIMIT - us) / Ta;
-                vs += newa * Ta;
-              }
-              
-              double final_s = s, final_vs, final_as;
-              if(T < Ta){
-                final_s += us*T + 0.5*newa*T*T;
-                final_vs = us + newa*T;
-                final_as = newa;
+              double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
+              double T = (SPEED_LIMIT - us) * TIME_TO_MAX / SPEED_LIMIT;
+              double final_s, final_vs, final_as;
+              double final_vd;
+              if(T/0.02 < 50) {
+                std::cout << "***** Cruise" << std::endl;
+                total_path_size = 200;
+                T = total_path_size * 0.02;
+                final_s = s + us * T;
+                final_vs = SPEED_LIMIT;
+                final_as = 0;
               } else {
-                final_s += us*Ta + 0.5*newa*Ta*Ta;
-                final_s += vs * (T-Ta);
-                final_vs = vs;
+                // generate smooth curves
+                double accel = (SPEED_LIMIT - us) / T;
+                if(T > 4) {
+                  std::cout << "***** Clip" << std::endl;
+                  // Clip trajectory to short distance
+                  total_path_size = 200 + 10 * (SPEED_LIMIT - us);
+                  T = total_path_size * 0.02;
+                }
+                final_vs = us + accel * T;
+                final_s = s + us * T + 0.5 * accel * T * T;
                 final_as = 0;
               }
-              
+              final_vd = (target_d-car_d)/T;
+              clip(final_vd);
+
+              // Trajectory Generation
               vector<double> Si = { s, us, as };
               vector<double> Sf = { final_s, final_vs, final_as };
 
               vector<double> Di = { d, ud, ad };
-              vector<double> Df = { target_d, 0, 0 };
+              vector<double> Df = { target_d, final_vd, 0 };
 
-              std::cout << "T:" << T << "; Ta:" << Ta << "; newa:" << newa << std::endl;
-              std::cout << "sf,vf,af:" << final_s << ", " << final_vs << ", " << final_as << std::endl;
-              std::cout << "df,vf,af:" << target_d << ", " << 0 << ", " << 0 << std::endl;
+              std::cout << "T:" << T << std::endl;
+              std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << final_as << "}" << std::endl;
+              std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< target_d << "," << final_vd << "," << 0 << "}" << std::endl;
               
               JMT(Scoeffs, Si, Sf, T);
               JMT(Dcoeffs, Di, Df, T);
-
+              
               // Get 5 points for spline
               std::vector<double> Xpts, Ypts, Tpts;
 
-              if(path_size > 0) {
+              if(prev_path_size > 0) {
                 // Add car's current position to trajectory spline generation
-                Tpts.push_back(-path_size*0.02);
+                Tpts.push_back(-prev_path_size*0.02);
                 Xpts.push_back(car_x);
                 Ypts.push_back(car_y);
               }
@@ -417,13 +441,12 @@ int main() {
               Xspline.set_points(Tpts,Xpts);
               Yspline.set_points(Tpts,Ypts);
 
-              std::cout << "Spline done" << std::endl;
-
-              double t = -0.02 * path_size;
-              for(int i = 0; i < max_pts; i++, t += 0.02)
+              double t = -0.02 * prev_path_size;
+              for(int i = 0; i < total_path_size; i++, t += 0.02)
               {    
                 double x = Xspline(t);
                 double y = Yspline(t);
+                //std::cout << x << "\t" << y << std::endl;
                 next_x_vals.push_back(x);
                 next_y_vals.push_back(y);
               }
