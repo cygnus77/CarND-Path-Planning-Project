@@ -287,7 +287,7 @@ int main() {
 
     // The max s value before wrapping around the track back to 0
     double max_s = 6945.554;
-    double target_d = 6.16483;
+    
 
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -351,6 +351,7 @@ int main() {
               if(prev_path_size == 0)
               {
                 s = car_s;
+                // Starting at pure 0 causes some shake at startup, to minimize that, we start a little faster
                 us = 0.5;
                 as = 0.07;
 
@@ -372,36 +373,26 @@ int main() {
                 ad = poly_eval(derivative(derivative(Dcoeffs)), T);
               }
 
-              //std::cout << "s,u,a:" << s << ", " << us << ", " << as << std::endl;
-              //std::cout << "d,u,a:" << d << ", " << ud << ", " << ad << std::endl;
+              // Set trajectory parameters
+              const double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
+              double targetSpeed = SPEED_LIMIT;
+              double target_d = 6.16483;
+              double T = abs(targetSpeed - us) * TIME_TO_MAX / SPEED_LIMIT;
 
               // Calculate trajectory
-              double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
-              double T = (SPEED_LIMIT - us) * TIME_TO_MAX / SPEED_LIMIT;
               double final_s, final_vs, final_as;
               double final_vd;
-              if(T/0.02 < 50) {
-                std::cout << "***** Cruise" << std::endl;
-                total_path_size = 200;
-                T = total_path_size * 0.02;
-                final_s = s + us * T;
-                final_vs = SPEED_LIMIT;
-                final_as = 0;
-              } else {
-                // generate smooth curves
-                double accel = (SPEED_LIMIT - us) / T;
-                if(T > 4) {
-                  std::cout << "***** Clip" << std::endl;
-                  // Clip trajectory to short distance
-                  total_path_size = 200 + 10 * (SPEED_LIMIT - us);
-                  T = total_path_size * 0.02;
-                }
-                final_vs = us + accel * T;
-                final_s = s + us * T + 0.5 * accel * T * T;
-                final_as = 0;
-              }
+              double accel = abs(targetSpeed-us) < 3 ? 0 : (targetSpeed - us) / T;
+
+              // Set trajectory distance and time
+              total_path_size = 200 + 10 * (targetSpeed - us);
+              T = total_path_size * 0.02;
+
+              // Calculate end configuration
+              final_vs = us + accel * T;
+              final_s = s + us * T + 0.5 * accel * T * T;
+              final_as = 0;
               final_vd = (target_d-car_d)/T;
-              clip(final_vd);
 
               // Trajectory Generation
               vector<double> Si = { s, us, as };
@@ -416,6 +407,24 @@ int main() {
               
               JMT(Scoeffs, Si, Sf, T);
               JMT(Dcoeffs, Di, Df, T);
+
+              // Collision Detection
+              for(auto& f: sensor_fusion) {
+                int id = f[0];
+                double x = f[1];
+                double y = f[2];
+                double vx = f[3];
+                double vy = f[4];
+                double s = f[5];
+                double d = f[6];
+                //std::cout << "enemy car: " << id << ",x:" << x << ",y:" << y << ",vx:" << vx << ",vy:" << vy << ",s:" << s << ",d:" << d << std::endl;
+
+
+              }
+
+
+
+              // Trjaectory execution
               
               // Get 5 points for spline
               std::vector<double> Xpts, Ypts, Tpts;
