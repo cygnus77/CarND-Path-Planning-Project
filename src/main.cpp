@@ -434,16 +434,19 @@ int main() {
               // Get points for spline
               std::vector<double> Xpts, Ypts, Tpts;
 
+              double startT = 0;
               if(prev_path_size > 0) {
                 // Add car's current position to trajectory spline generation
-                for(int i = 0; i < total_path_size-prev_path_size; i++) {
+                for(int i = 0; i < min(3, total_path_size-prev_path_size); i++) {
                   Tpts.push_back((i-prev_path_size)*0.02);
                   Xpts.push_back(previous_path_x[i]);
                   Ypts.push_back(previous_path_y[i]);
                 }
+              } else {
+                startT = (us < 5) ? T/2.0 : 0;
               }
 
-              for(double t = T/4.0; t <= T; t += T/4.0) {
+              for(double t = startT ; t <= T; t += T/4.0) {
                 double s = poly_eval(Scoeffs, t);
                 double d = poly_eval(Dcoeffs, t);
                 if(s > max_s) s -= max_s;
@@ -453,9 +456,9 @@ int main() {
                 Tpts.push_back(t);
               }
 
-              // for(int i = 0; i < Tpts.size(); i++) {
-              //   std::cout << Tpts[i] << ": " << Xpts[i] << "," << Ypts[i] << std::endl;
-              // }
+              for(int i = 0; i < Tpts.size(); i++) {
+                std::cout << Tpts[i] << ": " << Xpts[i] << "," << Ypts[i] << std::endl;
+              }
 
               tk::spline Xspline, Yspline;
               Xspline.set_points(Tpts,Xpts);
