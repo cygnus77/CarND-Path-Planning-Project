@@ -16,7 +16,7 @@ using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
 #define SPEED_LIMIT 20.0  // m/s = 50 mph
-#define TIME_TO_MAX 20.0      // 0 to 50 in 20 sec
+#define TIME_TO_MAX 5.0      // 0 to 50 in 20 sec
 #define MPH2MS  0.447027269
 
 // for convenience
@@ -335,108 +335,115 @@ int main() {
             int prev_path_size = previous_path_x.size();
 
             
-            if(prev_path_size > 20) {
-
-              for(int i = 0; i < prev_path_size; i++)
-              {
-                  next_x_vals.push_back(previous_path_x[i]);
-                  next_y_vals.push_back(previous_path_y[i]);
-              }
+            std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << "car_xy: (" << car_x << "," << car_y << ")" << std::endl;
             
-            } else {
+            double s, d, as, ad, us, ud;
+            if(prev_path_size == 0)
+            {
+              s = car_s;
+              us = 0;
+              as = 0;
 
-              //std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << std::endl;
-              
-              double s, d, as, ad, us, ud;
-              if(prev_path_size == 0)
-              {
-                s = car_s;
-                // Starting at pure 0 causes some shake at startup, to minimize that, we start a little faster
-                us = 0.5;
-                as = 0.07;
+              d = car_d;
+              ud = 0;
+              ad = 0;
+            }
+            else
+            {
+              double T = (total_path_size - prev_path_size)*0.02;
+              // TODO: replace this with poly_eval(Scoeffs, T), poly_eval(Dcoeffs, T)
+              s = poly_eval(Scoeffs, T);
+              d = poly_eval(Dcoeffs, T);
 
-                d = car_d;
-                ud = 0;
-                ad = 0;
-              }
-              else
-              {
-                double T = (total_path_size - prev_path_size)*0.02;
-                // TODO: replace this with poly_eval(Scoeffs, T), poly_eval(Dcoeffs, T)
-                s = end_path_s;
-                d = end_path_d;
+              // Calculate velocities and accelaration from previous JMT
+              us = poly_eval(derivative(Scoeffs), T);
+              as = poly_eval(derivative(derivative(Scoeffs)), T);
+              ud = poly_eval(derivative(Dcoeffs), T);
+              ad = poly_eval(derivative(derivative(Dcoeffs)), T);
+            }
 
-                // Calculate velocities and accelaration from previous JMT
-                us = poly_eval(derivative(Scoeffs), T);
-                as = poly_eval(derivative(derivative(Scoeffs)), T);
-                ud = poly_eval(derivative(Dcoeffs), T);
-                ad = poly_eval(derivative(derivative(Dcoeffs)), T);
-              }
+            // Set trajectory parameters
+            const double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
+            double targetSpeed = SPEED_LIMIT;
+            double target_d = 6.16483;
+            double T = abs(targetSpeed - us) * TIME_TO_MAX / SPEED_LIMIT;
 
-              // Set trajectory parameters
-              const double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
-              double targetSpeed = SPEED_LIMIT;
-              double target_d = 6.16483;
-              double T = abs(targetSpeed - us) * TIME_TO_MAX / SPEED_LIMIT;
+            // Calculate trajectory
+            double final_s, final_vs, final_as;
+            double final_vd;
+            double accel = (targetSpeed - us) / T;
 
-              // Calculate trajectory
-              double final_s, final_vs, final_as;
-              double final_vd;
-              double accel = abs(targetSpeed-us) < 3 ? 0 : (targetSpeed - us) / T;
+            // Set trajectory distance and time
+            total_path_size = 100;
+            T = total_path_size * 0.02;
 
-              // Set trajectory distance and time
-              total_path_size = 200 + 10 * (targetSpeed - us);
-              T = total_path_size * 0.02;
+            // Calculate end configuration
+            final_vs = us + accel * T;
+            final_s = s + us * T + 0.5 * accel * T * T;
+            final_as = 0;
+            final_vd = (target_d-car_d)/T;
 
-              // Calculate end configuration
-              final_vs = us + accel * T;
-              final_s = s + us * T + 0.5 * accel * T * T;
-              final_as = 0;
-              final_vd = (target_d-car_d)/T;
+            // Trajectory Generation
+            vector<double> Si = { s, us, as };
+            vector<double> Sf = { final_s, final_vs, final_as };
 
-              // Trajectory Generation
-              vector<double> Si = { s, us, as };
-              vector<double> Sf = { final_s, final_vs, final_as };
+            vector<double> Di = { d, ud, ad };
+            vector<double> Df = { target_d, final_vd, 0 };
 
-              vector<double> Di = { d, ud, ad };
-              vector<double> Df = { target_d, final_vd, 0 };
+            std::cout << "T:" << T << std::endl;
+            std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << final_as << "}" << std::endl;
+            std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< target_d << "," << final_vd << "," << 0 << "}" << std::endl;
+            
+            JMT(Scoeffs, Si, Sf, T);
+            JMT(Dcoeffs, Di, Df, T);
 
-              std::cout << "T:" << T << std::endl;
-              std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << final_as << "}" << std::endl;
-              std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< target_d << "," << final_vd << "," << 0 << "}" << std::endl;
-              
-              JMT(Scoeffs, Si, Sf, T);
-              JMT(Dcoeffs, Di, Df, T);
-
-              // Collision Detection
-              for(auto& f: sensor_fusion) {
-                int id = f[0];
-                double x = f[1];
-                double y = f[2];
-                double vx = f[3];
-                double vy = f[4];
-                double s = f[5];
-                double d = f[6];
-                //std::cout << "enemy car: " << id << ",x:" << x << ",y:" << y << ",vx:" << vx << ",vy:" << vy << ",s:" << s << ",d:" << d << std::endl;
+            // Collision Detection
+            for(auto& f: sensor_fusion) {
+              int id = f[0];
+              double x = f[1];
+              double y = f[2];
+              double vx = f[3];
+              double vy = f[4];
+              double s = f[5];
+              double d = f[6];
+              //std::cout << "enemy car: " << id << ",x:" << x << ",y:" << y << ",vx:" << vx << ",vy:" << vy << ",s:" << s << ",d:" << d << std::endl;
 
 
-              }
+            }
 
 
 
               // Trjaectory execution
+
+            // if(us < 5) {
+            //   std::cout << "Exec" << std::endl;
+            //   // Don't spline - just execute trajectory
+            //   double t = 0;//-0.02 * prev_path_size;
+            //   for(int i = 0; i < total_path_size; i++, t += 0.02)
+            //   {
+            //     double s = poly_eval(Scoeffs, t);
+            //     double d = poly_eval(Dcoeffs, t);
+            //     if(s > max_s) s -= max_s;
+            //     vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            //     next_x_vals.push_back(xy[0]);
+            //     next_y_vals.push_back(xy[1]);
+            //   }
+
+            // } else {
               
-              // Get 5 points for spline
+              // Get points for spline
               std::vector<double> Xpts, Ypts, Tpts;
 
               if(prev_path_size > 0) {
                 // Add car's current position to trajectory spline generation
-                Tpts.push_back(-prev_path_size*0.02);
-                Xpts.push_back(car_x);
-                Ypts.push_back(car_y);
+                for(int i = 0; i < total_path_size-prev_path_size; i++) {
+                  Tpts.push_back((i-prev_path_size)*0.02);
+                  Xpts.push_back(previous_path_x[i]);
+                  Ypts.push_back(previous_path_y[i]);
+                }
               }
 
-              for(double t = 0; t <= T; t += T/3.0) {
+              for(double t = T/4.0; t <= T; t += T/4.0) {
                 double s = poly_eval(Scoeffs, t);
                 double d = poly_eval(Dcoeffs, t);
                 if(s > max_s) s -= max_s;
@@ -445,6 +452,10 @@ int main() {
                 Ypts.push_back(xy[1]);
                 Tpts.push_back(t);
               }
+
+              // for(int i = 0; i < Tpts.size(); i++) {
+              //   std::cout << Tpts[i] << ": " << Xpts[i] << "," << Ypts[i] << std::endl;
+              // }
 
               tk::spline Xspline, Yspline;
               Xspline.set_points(Tpts,Xpts);
@@ -459,7 +470,7 @@ int main() {
                 next_x_vals.push_back(x);
                 next_y_vals.push_back(y);
               }
-            }
+            //}
 
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
