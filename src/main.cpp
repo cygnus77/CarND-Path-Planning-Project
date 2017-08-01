@@ -27,6 +27,9 @@ constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
+// The max s value before wrapping around the track back to 0
+const double max_s = 6945.554;
+
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
 // else the empty string "" will be returned.
@@ -242,6 +245,49 @@ void print_trajectory(const string& msg, const vector<double>& coeffs)
   std::cout << std::endl;
 }
 
+class Car
+{
+public:
+  int id;
+  double x,y,vx,vy,s,d;
+  Car(const std::vector<double>& f){
+    id = f[0];
+    x = f[1];
+    y = f[2];
+    vx = f[3];
+    vy = f[4];
+    s = f[5];
+    d = f[6];
+  }
+  Car() : id(-1) {}
+
+  void print()
+  {
+    std::cout << "car: " << id << ",x:" << x << ",y:" << y << ",vx:" << vx << ",vy:" << vy << ",s:" << s << ",d:" << d << std::endl;
+  }
+  bool collidesWithXY(double tr_x, double tr_y)
+  {
+    return (tr_x >= x - 1 && tr_x <= x + 1 && tr_y >= y - 1 && tr_y <= y + 1);
+  }
+  bool collidesWithSD(double tr_s, double tr_d)
+  {
+    return (tr_s >= s - 1 && tr_s <= s + 1 && tr_d >= d - 1 && tr_d <= d + 1);
+  }
+  double distance_from(double s2)
+  {
+    double s_dist;
+    if(s > s2) {
+      s_dist = s - s2;
+    } else {
+      s_dist = (max_s - s2) + s;
+    }
+    return s_dist;
+  }
+  bool in_same_lane(double d2) {
+    return abs(d-d2)<=2.0;
+  }
+};
+
 #define clip(x) x = x < 1e-5 ? 0 : x
 
 int main() {
@@ -254,7 +300,9 @@ int main() {
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
 
-  int total_path_size;
+  // Set trajectory distance and time         
+  const int tr_len = 100;
+  const double tr_T = tr_len * 0.02;
   vector<double> Scoeffs, Dcoeffs;
 
   // Waypoint map to read from
@@ -282,13 +330,10 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs, &total_path_size](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs, tr_len, tr_T](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
 
-    // The max s value before wrapping around the track back to 0
-    double max_s = 6945.554;
     
-
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -350,7 +395,9 @@ int main() {
             }
             else
             {
-              double T = (total_path_size - prev_path_size)*0.02;
+
+              double T = (tr_len - prev_path_size)*0.02;
+
               // TODO: replace this with poly_eval(Scoeffs, T), poly_eval(Dcoeffs, T)
               s = poly_eval(Scoeffs, T);
               d = poly_eval(Dcoeffs, T);
@@ -362,118 +409,115 @@ int main() {
               ad = poly_eval(derivative(derivative(Dcoeffs)), T);
             }
 
+            // Collision detection
+            double min_car_dist = max_s;
+            Car nearest_car_in_front;
+            for(const std::vector<double>& carinfo: sensor_fusion) {
+              Car car(carinfo);
+              if(car.in_same_lane(d))
+              {
+                double s_dist = car.distance_from(s);
+                if(s_dist < min_car_dist) {
+                  nearest_car_in_front = car;
+                  min_car_dist = s_dist;
+                }
+              }
+            }
+            // if(nearest_car_in_front.id != -1) {
+            //   cout << "car_s = " << car_s << ", s = " << s << " ";
+            //   cout << "Nearest car: " << nearest_car_in_front.id << " @ " << nearest_car_in_front.s << ", gap=" << nearest_car_in_front.s - car_s << endl;
+            // }
+
+/*
+            for(int i = 0; i < prev_path_size; i++) {
+              double tr_x = previous_path_x[i];
+              double tr_y = previous_path_y[i];
+
+              // Collision Detection
+              for(const std::vector<double>& carinfo: sensor_fusion) {
+                Car car(carinfo);
+                if(car.collidesWithXY(tr_x, tr_y)) {
+                  
+                  std::cout << "collision with " << car.id << "\n";
+                  //car.print();
+                }
+              }
+            }
+*/
             // Set trajectory parameters
-            const double maxJerk = SPEED_LIMIT / (TIME_TO_MAX * TIME_TO_MAX);
             double targetSpeed = SPEED_LIMIT;
             double target_d = 6.16483;
-            double T = abs(targetSpeed - us) * TIME_TO_MAX / SPEED_LIMIT;
 
             // Calculate trajectory
-            double final_s, final_vs, final_as;
-            double final_vd;
-            double accel = (targetSpeed - us) / T;
-
-            // Set trajectory distance and time
-            total_path_size = 100;
-            T = total_path_size * 0.02;
+            double final_s, final_vs;
+            double final_vd = 0;
+            double accel = min((targetSpeed - us)*(SPEED_LIMIT/TIME_TO_MAX), (SPEED_LIMIT/TIME_TO_MAX));
 
             // Calculate end configuration
-            final_vs = us + accel * T;
-            final_s = s + us * T + 0.5 * accel * T * T;
-            final_as = 0;
-            final_vd = (target_d-car_d)/T;
+            final_s = s + us * tr_T + 0.5 * accel * tr_T * tr_T;
+            final_vs = us + accel * tr_T;
+            final_vd = (target_d-car_d)/tr_T;
 
             // Trajectory Generation
             vector<double> Si = { s, us, as };
-            vector<double> Sf = { final_s, final_vs, final_as };
+            vector<double> Sf = { final_s, final_vs, 0 };
 
             vector<double> Di = { d, ud, ad };
             vector<double> Df = { target_d, final_vd, 0 };
 
-            std::cout << "T:" << T << std::endl;
-            std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << final_as << "}" << std::endl;
+            std::cout << "accel:" << accel << std::endl;
+            std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << 0 << "}" << std::endl;
             std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< target_d << "," << final_vd << "," << 0 << "}" << std::endl;
             
-            JMT(Scoeffs, Si, Sf, T);
-            JMT(Dcoeffs, Di, Df, T);
+            JMT(Scoeffs, Si, Sf, tr_T);
+            JMT(Dcoeffs, Di, Df, tr_T);
 
-            // Collision Detection
-            for(auto& f: sensor_fusion) {
-              int id = f[0];
-              double x = f[1];
-              double y = f[2];
-              double vx = f[3];
-              double vy = f[4];
-              double s = f[5];
-              double d = f[6];
-              //std::cout << "enemy car: " << id << ",x:" << x << ",y:" << y << ",vx:" << vx << ",vy:" << vy << ",s:" << s << ",d:" << d << std::endl;
+            // Generate points for spline
+            // add up to 3 points from previous trajectory - this lets the simulator ensure continuity
+            // add some points from desired trajectory
+            //  - for low speeds use only two points, for higher speeds, use 4 points
+            std::vector<double> Xpts, Ypts, Tpts;
 
-
+            if(prev_path_size > 0) {
+              // Add car's current position to trajectory spline generation
+              Tpts.push_back(0);
+              Xpts.push_back(previous_path_x[0]);
+              Ypts.push_back(previous_path_y[0]);
+              // if(prev_path_size > tr_len / 5) {
+              //   Tpts.push_back((tr_len / 5) * 0.02);
+              //   Xpts.push_back(previous_path_x[tr_len / 5]);
+              //   Ypts.push_back(previous_path_y[tr_len / 5]);
+              // }
             }
 
+            for(double t = prev_path_size > 0 ? tr_T/2.0 : 0; t <= tr_T; t += tr_T/2.0) {
+              double s = poly_eval(Scoeffs, t);
+              double d = poly_eval(Dcoeffs, t);
+              if(s > max_s) s -= max_s;
+              vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+              Xpts.push_back(xy[0]);
+              Ypts.push_back(xy[1]);
+              Tpts.push_back(t);
+            }
+
+            // for(int i = 0; i < Tpts.size(); i++) {
+            //   std::cout << Tpts[i] << ": " << Xpts[i] << "," << Ypts[i] << std::endl;
+            // }
+
+            tk::spline Xspline, Yspline;
+            Xspline.set_points(Tpts,Xpts);
+            Yspline.set_points(Tpts,Ypts);
 
 
-              // Trjaectory execution
-
-            // if(us < 5) {
-            //   std::cout << "Exec" << std::endl;
-            //   // Don't spline - just execute trajectory
-            //   double t = 0;//-0.02 * prev_path_size;
-            //   for(int i = 0; i < total_path_size; i++, t += 0.02)
-            //   {
-            //     double s = poly_eval(Scoeffs, t);
-            //     double d = poly_eval(Dcoeffs, t);
-            //     if(s > max_s) s -= max_s;
-            //     vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            //     next_x_vals.push_back(xy[0]);
-            //     next_y_vals.push_back(xy[1]);
-            //   }
-
-            // } else {
-              
-              // Get points for spline
-              std::vector<double> Xpts, Ypts, Tpts;
-
-              double startT = 0;
-              if(prev_path_size > 0) {
-                // Add car's current position to trajectory spline generation
-                for(int i = 0; i < min(3, total_path_size-prev_path_size); i++) {
-                  Tpts.push_back((i-prev_path_size)*0.02);
-                  Xpts.push_back(previous_path_x[i]);
-                  Ypts.push_back(previous_path_y[i]);
-                }
-              } else {
-                startT = (us < 5) ? T/2.0 : 0;
-              }
-
-              for(double t = startT ; t <= T; t += T/4.0) {
-                double s = poly_eval(Scoeffs, t);
-                double d = poly_eval(Dcoeffs, t);
-                if(s > max_s) s -= max_s;
-                vector<double> xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                Xpts.push_back(xy[0]);
-                Ypts.push_back(xy[1]);
-                Tpts.push_back(t);
-              }
-
-              for(int i = 0; i < Tpts.size(); i++) {
-                std::cout << Tpts[i] << ": " << Xpts[i] << "," << Ypts[i] << std::endl;
-              }
-
-              tk::spline Xspline, Yspline;
-              Xspline.set_points(Tpts,Xpts);
-              Yspline.set_points(Tpts,Ypts);
-
-              double t = -0.02 * prev_path_size;
-              for(int i = 0; i < total_path_size; i++, t += 0.02)
-              {    
-                double x = Xspline(t);
-                double y = Yspline(t);
-                //std::cout << x << "\t" << y << std::endl;
-                next_x_vals.push_back(x);
-                next_y_vals.push_back(y);
-              }
-            //}
+            // Trjaectory execution
+            for(int i = 0; i < tr_len; i++)
+            {    
+              double x = Xspline(i*0.02);
+              double y = Yspline(i*0.02);
+              //std::cout << x << "\t" << y << std::endl;
+              next_x_vals.push_back(x);
+              next_y_vals.push_back(y);
+            }
 
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
