@@ -17,6 +17,7 @@ using Eigen::VectorXd;
 
 #define SPEED_LIMIT 20.0  // m/s = 50 mph
 #define TIME_TO_MAX 5.0      // 0 to 50 in 20 sec
+#define SAFE_FOLLOWING_DISTANCE 10 // meters
 #define MPH2MS  0.447027269
 
 // for convenience
@@ -167,7 +168,6 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 	double y = seg_y + d*sin(perp_heading);
 
 	return {x,y};
-
 }
 
 void JMT(vector<double>& dst, const vector<double>& start, const vector <double>& end, double T)
@@ -245,6 +245,11 @@ void print_trajectory(const string& msg, const vector<double>& coeffs)
   std::cout << std::endl;
 }
 
+double laneToD(int lane)
+{
+  return 2.0 + (4.0*lane);
+}
+
 class Car
 {
 public:
@@ -283,12 +288,39 @@ public:
     }
     return s_dist;
   }
-  bool in_same_lane(double d2) {
-    return abs(d-d2)<=2.0;
+  bool in_same_lane(int lane) {
+    return abs(d-laneToD(lane))<=2.0;
+  }
+  double getVS() {
+    return sqrt(vx*vx + vy*vy);
+  }
+  operator bool() const
+  {
+    return id != -1;
   }
 };
 
 #define clip(x) x = x < 1e-5 ? 0 : x
+
+enum class FSM :int {KeepInLane, LookToSwitch, SwitchLeft, SwitchRight};
+
+bool IsSafeToSwitch(int lane, double s, double d, double us, const vector<vector<double> >& sensor_fusion){
+  
+  // Enumerate vehicles in target lane
+  for(const vector<double>& car_info: sensor_fusion) {
+    Car car(car_info);
+    if(car.in_same_lane(lane)) {
+      // Could it collide in a lane change ?
+      // behind and faster
+      if(s - car.s > 0 && s - car.s < SAFE_FOLLOWING_DISTANCE && car.getVS() >= us)
+        return false;
+      // in front and too close
+      if(car.s - s > 0 && car.s - s < 5 * SAFE_FOLLOWING_DISTANCE)
+        return false;
+    }
+  }
+  return true;
+}
 
 int main() {
   uWS::Hub h;
@@ -330,7 +362,10 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&Scoeffs,&Dcoeffs, tr_len, tr_T](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  FSM state = FSM::KeepInLane;
+  int currentLane = 1;
+
+  h.onMessage([&](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
 
     
@@ -372,16 +407,14 @@ int main() {
 
           	json msgJson;
 
+            // Path made up of (x,y) points that the car will visit sequentially every .02 seconds
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
 
-
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
             int prev_path_size = previous_path_x.size();
 
-            
-            std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << "car_xy: (" << car_x << "," << car_y << ")" << std::endl;
-            
+            //std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << "car_xy: (" << car_x << "," << car_y << ")" << std::endl;
+
             double s, d, as, ad, us, ud;
             if(prev_path_size == 0)
             {
@@ -398,7 +431,6 @@ int main() {
 
               double T = (tr_len - prev_path_size)*0.02;
 
-              // TODO: replace this with poly_eval(Scoeffs, T), poly_eval(Dcoeffs, T)
               s = poly_eval(Scoeffs, T);
               d = poly_eval(Dcoeffs, T);
 
@@ -409,65 +441,118 @@ int main() {
               ad = poly_eval(derivative(derivative(Dcoeffs)), T);
             }
 
-            // Collision detection
-            double min_car_dist = max_s;
-            Car nearest_car_in_front;
-            for(const std::vector<double>& carinfo: sensor_fusion) {
-              Car car(carinfo);
-              if(car.in_same_lane(d))
-              {
-                double s_dist = car.distance_from(s);
-                if(s_dist < min_car_dist) {
-                  nearest_car_in_front = car;
-                  min_car_dist = s_dist;
-                }
-              }
-            }
-            // if(nearest_car_in_front.id != -1) {
-            //   cout << "car_s = " << car_s << ", s = " << s << " ";
-            //   cout << "Nearest car: " << nearest_car_in_front.id << " @ " << nearest_car_in_front.s << ", gap=" << nearest_car_in_front.s - car_s << endl;
-            // }
-
-/*
-            for(int i = 0; i < prev_path_size; i++) {
-              double tr_x = previous_path_x[i];
-              double tr_y = previous_path_y[i];
-
-              // Collision Detection
-              for(const std::vector<double>& carinfo: sensor_fusion) {
-                Car car(carinfo);
-                if(car.collidesWithXY(tr_x, tr_y)) {
-                  
-                  std::cout << "collision with " << car.id << "\n";
-                  //car.print();
-                }
-              }
-            }
-*/
-            // Set trajectory parameters
-            double targetSpeed = SPEED_LIMIT;
-            double target_d = 6.16483;
-
-            // Calculate trajectory
+            // Trajectory end configuration
             double final_s, final_vs;
             double final_vd = 0;
-            double accel = min((targetSpeed - us)*(SPEED_LIMIT/TIME_TO_MAX), (SPEED_LIMIT/TIME_TO_MAX));
+            double final_d;
 
-            // Calculate end configuration
-            final_s = s + us * tr_T + 0.5 * accel * tr_T * tr_T;
-            final_vs = us + accel * tr_T;
-            final_vd = (target_d-car_d)/tr_T;
+            if(state == FSM::LookToSwitch) {
+              if(currentLane == 0) {
+                if(IsSafeToSwitch(1, s, d, us, sensor_fusion))
+                  state = FSM::SwitchRight;
+                else
+                  state = FSM::KeepInLane;
+              }
+              else if(currentLane == 1) {
+                if(IsSafeToSwitch(0, s, d, us, sensor_fusion))
+                  state = FSM::SwitchLeft;
+                else if(IsSafeToSwitch(2, s, d, us, sensor_fusion))
+                  state = FSM::SwitchRight;
+                else
+                  state = FSM::KeepInLane;
+              }
+              else if(currentLane == 2) {
+                if(IsSafeToSwitch(1, s, d, us, sensor_fusion))
+                  state = FSM::SwitchLeft;
+                else
+                  state = FSM::KeepInLane;
+              }
+            }
+
+            if(state == FSM::SwitchLeft || state == FSM::SwitchRight) {
+              // Completed switch ??
+              int newLane = currentLane + (state==FSM::SwitchRight ? 1 : -1);
+              if( abs(laneToD(newLane) - d) < 2.0 ) {
+                currentLane = newLane;
+                state = FSM::KeepInLane;
+              }
+            }
+
+            if(state == FSM::KeepInLane) {
+
+              // Collision detection
+              double min_car_dist = max_s;
+              Car car_front;
+              for(const std::vector<double>& carinfo: sensor_fusion) {
+                Car car(carinfo);
+                if(car.in_same_lane(currentLane))
+                {
+                  double s_dist = car.distance_from(s);
+                  if(s_dist < min_car_dist) {
+                    car_front = car;
+                    min_car_dist = s_dist;
+                  }
+                }
+              }
+              // if(car_front) {
+              //   cout << "car_s = " << car_s << ", s = " << s << " ";
+              //   cout << "Nearest car: " << car_front.id << " @ " << car_front.s << ", gap=" << min_car_dist << ", velocity: " << car_front.getVS() << endl;
+              // }
+
+              // Set trajectory parameters
+              double targetSpeed = SPEED_LIMIT;
+              double accel;
+              if(min_car_dist < 0 || min_car_dist > 3*SAFE_FOLLOWING_DISTANCE) {
+                // No car ahead
+                // Calculate end configuration for full speed driving
+                accel = min((targetSpeed - us)*(SPEED_LIMIT/TIME_TO_MAX), (SPEED_LIMIT/TIME_TO_MAX));
+
+              } else {
+                // Car ahead, start following
+                // decelaration needed to get to safe distance behind vehicle
+                double slack = min_car_dist - SAFE_FOLLOWING_DISTANCE;
+                if(slack < 0) // too close, max decelaration, avoid -ve t
+                  accel = -SPEED_LIMIT/TIME_TO_MAX;
+                else{
+                  double t = slack / us;
+                  accel = (car_front.getVS() - us) / t;
+                }
+              }
+
+              final_s = s + us * tr_T + 0.5 * accel * tr_T * tr_T;
+              final_vs = us + accel * tr_T;
+
+              // Keep in lane
+              final_d = laneToD(currentLane);
+              final_vd = (final_d-car_d)/tr_T;
+
+              if(min_car_dist - SAFE_FOLLOWING_DISTANCE < 15)  {
+                state = FSM::LookToSwitch;
+              }
+            }
+            else if(state == FSM::SwitchLeft || state == FSM::SwitchRight) {
+
+              int newLane = currentLane + (state==FSM::SwitchRight ? 1 : -1);
+              double targetSpeed = SPEED_LIMIT;
+              double accel = min((targetSpeed - us)*(SPEED_LIMIT/TIME_TO_MAX), (SPEED_LIMIT/TIME_TO_MAX));
+              final_s = s + us * tr_T + 0.5 * accel * tr_T * tr_T;
+              final_vs = us + accel * tr_T;
+              
+              final_d = laneToD(newLane);
+              final_vd = (final_d-car_d)/tr_T;
+            }
+            
 
             // Trajectory Generation
             vector<double> Si = { s, us, as };
             vector<double> Sf = { final_s, final_vs, 0 };
 
             vector<double> Di = { d, ud, ad };
-            vector<double> Df = { target_d, final_vd, 0 };
+            vector<double> Df = { final_d, final_vd, 0 };
 
-            std::cout << "accel:" << accel << std::endl;
-            std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << 0 << "}" << std::endl;
-            std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< target_d << "," << final_vd << "," << 0 << "}" << std::endl;
+            // std::cout << "accel:" << accel << std::endl;
+            // std::cout << "{" << s << "," << us << "," << as << "} - {"<< final_s << "," << final_vs << "," << 0 << "}" << std::endl;
+            // std::cout << "{" << d << "," << ud << "," << ad << "} - {"<< final_d << "," << final_vd << "," << 0 << "}" << std::endl;
             
             JMT(Scoeffs, Si, Sf, tr_T);
             JMT(Dcoeffs, Di, Df, tr_T);
@@ -483,14 +568,10 @@ int main() {
               Tpts.push_back(0);
               Xpts.push_back(previous_path_x[0]);
               Ypts.push_back(previous_path_y[0]);
-              // if(prev_path_size > tr_len / 5) {
-              //   Tpts.push_back((tr_len / 5) * 0.02);
-              //   Xpts.push_back(previous_path_x[tr_len / 5]);
-              //   Ypts.push_back(previous_path_y[tr_len / 5]);
-              // }
             }
 
-            for(double t = prev_path_size > 0 ? tr_T/2.0 : 0; t <= tr_T; t += tr_T/2.0) {
+            // Create spline for twice the path length so there is smoothness to the curve
+            for(double t = prev_path_size > 0 ? tr_T/2.0 : 0; t <= tr_T; t += tr_T/2) {
               double s = poly_eval(Scoeffs, t);
               double d = poly_eval(Dcoeffs, t);
               if(s > max_s) s -= max_s;
