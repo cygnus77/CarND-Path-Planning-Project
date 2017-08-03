@@ -311,8 +311,12 @@ bool IsSafeToSwitch(int lane, double s, double d, double us, const vector<vector
     Car car(car_info);
     if(car.in_same_lane(lane)) {
       // Could it collide in a lane change ?
-      // behind and faster
-      if(s - car.s > 0 && s - car.s < SAFE_FOLLOWING_DISTANCE && car.getVS() >= us)
+      
+      // behind and too close
+      if(s - car.s > 0 && s - car.s < SAFE_FOLLOWING_DISTANCE)
+        return false;
+      // behind but faster
+      if(s - car.s > 0 && s - car.s < 2*SAFE_FOLLOWING_DISTANCE && car.getVS() >= us)
         return false;
       // in front and too close
       if(car.s - s > 0 && car.s - s < 5 * SAFE_FOLLOWING_DISTANCE)
@@ -564,14 +568,20 @@ int main() {
             std::vector<double> Xpts, Ypts, Tpts;
 
             if(prev_path_size > 0) {
-              // Add car's current position to trajectory spline generation
+              for(int i = 0; i < 2; i++) {
+                // Add car's current position to trajectory spline generation
+                Tpts.push_back(i*0.02);
+                Xpts.push_back(previous_path_x[i]);
+                Ypts.push_back(previous_path_y[i]);
+              }
+            } else {
               Tpts.push_back(0);
-              Xpts.push_back(previous_path_x[0]);
-              Ypts.push_back(previous_path_y[0]);
+              Xpts.push_back(car_x);
+              Ypts.push_back(car_y);
             }
 
             // Create spline for twice the path length so there is smoothness to the curve
-            for(double t = prev_path_size > 0 ? tr_T/2.0 : 0; t <= tr_T; t += tr_T/2) {
+            for(double t = tr_T/2.0; t <= tr_T; t += tr_T/4.0) {
               double s = poly_eval(Scoeffs, t);
               double d = poly_eval(Dcoeffs, t);
               if(s > max_s) s -= max_s;
