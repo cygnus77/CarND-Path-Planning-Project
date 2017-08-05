@@ -118,7 +118,6 @@ Passing car on left:
 
 
 Driving for a mile:
-https://youtu.be/WwzDpZ_d0AQ
 
 [![1 Mile Lap](https://img.youtube.com/vi/WwzDpZ_d0AQ/0.jpg)](https://www.youtube.com/watch?v=WwzDpZ_d0AQ)
 
@@ -129,8 +128,9 @@ https://youtu.be/WwzDpZ_d0AQ
 1. The spline generator here is really easy to use - it is a single .hpp file to include in the project:
 http://kluge.in-chemnitz.de/opensource/spline/.
 
-2. Udacity's awesome simulator was a lot of fun - especially at the initial stage of this project when we had some spectacular crashes. Wish I could drive like this in New Jersey.
-[![Fun Crash](https://img.youtube.com/vi/lqD9JNocn8o/0.jpg)](https://www.youtube.com/watch?v=lqD9JNocn8o)
+2. Udacity's awesome simulator was a lot of fun - especially at the initial stage of this project when we had some spectacular crashes.
+
+[![Fun Crash](https://img.youtube.com/vi/lqD9JNocn8o/2.jpg)](https://www.youtube.com/watch?v=lqD9JNocn8o)
 
 
 ## Future work
