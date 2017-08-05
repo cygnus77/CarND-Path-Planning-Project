@@ -417,7 +417,7 @@ int main() {
 
             int prev_path_size = previous_path_x.size();
 
-            //std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << "car_xy: (" << car_x << "," << car_y << ")" << std::endl;
+            std::cout << "telemetry " << prev_path_size << "; car_speed_ms: " << car_speed_ms << "; car(s,d):" << car_s << "," << car_d << "; end(s,d):" << end_path_s << "," << end_path_d << "car_xy: (" << car_x << "," << car_y << ")" << std::endl;
 
             double s, d, as, ad, us, ud;
             if(prev_path_size == 0)
@@ -443,6 +443,13 @@ int main() {
               as = poly_eval(derivative(derivative(Scoeffs)), T);
               ud = poly_eval(derivative(Dcoeffs), T);
               ad = poly_eval(derivative(derivative(Dcoeffs)), T);
+            }
+
+            // Detect wrap around
+            if(s > 6000 && car_s < 100) {
+              cout << "**** Lap completed ****" << endl;
+              s = car_s;
+              d = car_d;
             }
 
             // Trajectory end configuration
