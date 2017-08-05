@@ -56,7 +56,7 @@ The resulting workflow was quite simple:
 
 Vidoe of trajectory: Staying in lane with constant speed, ignoring other cars
 
-[![Stay in lane with constant speed](https://img.youtube.com/vi/gX6t7NRcsgY/0.jpg)](https://www.youtube.com/watch?v=gX6t7NRcsgY)
+[![Stay in lane with constant speed](https://img.youtube.com/vi/gX6t7NRcsgY/1.jpg)](https://www.youtube.com/watch?v=gX6t7NRcsgY)
 
 
 
@@ -113,7 +113,8 @@ When the car is in either left-most or right-most lanes, obviously, there is onl
 If lane transitions are not possible, it executes the stay in lane behavior, waiting for an opportunity in the future.
 
 Passing car on left:
-[![Passing car](https://img.youtube.com/vi/xLesBk8xtTw/0.jpg)](https://www.youtube.com/watch?v=xLesBk8xtTw)
+
+[![Passing car](https://img.youtube.com/vi/xLesBk8xtTw/1.jpg)](https://www.youtube.com/watch?v=xLesBk8xtTw)
 
 
 Driving for a mile:
