@@ -58,10 +58,22 @@ Vidoe of trajectory: Staying in lane with constant speed, ignoring other cars
 
 [![Stay in lane with constant speed](https://img.youtube.com/vi/gX6t7NRcsgY/1.jpg)](https://www.youtube.com/watch?v=gX6t7NRcsgY)
 
+### Creating a smooth spline
+Point selection is the most important factor to generating a good spline.
 
+- The number of control points: 4-5 points are ideal.
+ - Splines with more than 5 points seemed to overfit the path, leading to steep accelaration.
+ - Splines with fewer than 4 points lost continuity between iterations and resulted in abrupt jerks between telemetry calls.
+
+- Starting and ending points:
+ - To ensure continuity with previously generated trajectory, we need to use the current car position and another point just ahead of it as control points.
+ - To prevent overfitting, I selected points at the half-way, three-forth and the end of the trajectory.
 
 ## Following cars and staying in lane
 Once a smooth, continuous trajectory was achieved, I focussed on slowing down to keep a safe following distance and avoid crashing into cars ahead of us in the same lane.
+
+![Finite State Machine](FSM.png "Finite state machine")
+
 
 The steps to realize this was quite simple using the sensor fusion data provided by the simulator:
 
